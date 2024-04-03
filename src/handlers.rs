@@ -27,6 +27,10 @@ impl Lng {
 #[derive(Deserialize, Clone, Debug)]
 struct Room(String);
 
+
+#[derive(Deserialize, Clone, Debug)]
+struct SelectedColor(i32);
+
 #[derive(Deserialize, Clone, Debug)]
 struct LastUpdate(String);
 impl LastUpdate {
@@ -42,6 +46,7 @@ struct Auth {
     pub lng: Lng,
     pub last_update: LastUpdate,
     pub room: Room,
+    pub selected_color: SelectedColor,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -54,6 +59,7 @@ struct Location {
 #[derive(Serialize, Deserialize, Debug)]
 struct LocationData {
     id: String,
+    selected_color: i32,
     location: Location,
 }
 
@@ -66,6 +72,7 @@ pub async fn handler(socket: Arc<Socket<LocalAdapter>>) {
             socket.extensions.insert(c.lat);
             socket.extensions.insert(c.lng);
             socket.extensions.insert(c.last_update.clone());
+            socket.extensions.insert(c.selected_color.clone());
 
 
             let locations_to_send = Arc::new(Mutex::new(Vec::new()));
@@ -86,10 +93,14 @@ pub async fn handler(socket: Arc<Socket<LocalAdapter>>) {
 
                 let mut rider_location = LocationData {
                     id: "0".to_string(),
+                    selected_color: 0,
                     location: location,
                 };
                 if let Some(ref rider_id_) = s.extensions.get::<UserId>() {
                     rider_location.id = rider_id_.0.to_string();
+                }
+                if let Some(ref selected_color) = s.extensions.get::<SelectedColor>() {
+                    rider_location.selected_color = selected_color.0;
                 }
                 locations_to_send.lock().unwrap().push(rider_location);
             });
@@ -100,6 +111,7 @@ pub async fn handler(socket: Arc<Socket<LocalAdapter>>) {
 
             let _ = socket.to(c.room.clone().0).emit("location_update", serde_json::to_string(&LocationData{
                 id: c.user_id.0,
+                selected_color: c.selected_color.0,
                 location: Location{
                     lat: c.lat.get_value(), 
                     lng: c.lng.get_value(),
@@ -123,6 +135,7 @@ pub async fn handler(socket: Arc<Socket<LocalAdapter>>) {
         socket.extensions.insert(loc.last_update.clone());
 
         let UserId(ref user_id) = *socket.extensions.get().unwrap();
+        let SelectedColor(ref selected_color) = *socket.extensions.get().unwrap();
         let Room(ref room) = *socket.extensions.get().unwrap();
 
         socket
@@ -131,6 +144,7 @@ pub async fn handler(socket: Arc<Socket<LocalAdapter>>) {
                 "location_update",
                 serde_json::to_string(&LocationData {
                     id: user_id.to_string(),
+                    selected_color: *selected_color,
                     location: loc,
                 })
                 .unwrap(),
