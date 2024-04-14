@@ -3,12 +3,21 @@ import L from 'leaflet';
 import { showNotify } from 'vant';
 import { Geolocation, type Position } from '@capacitor/geolocation';
 import { useInfoStore } from '@/stores/counter';
+import Hammer from 'hammerjs';
 
-// import {Peer} from "peerjs"
+import {Peer} from "peerjs"
 
 import { io, Socket } from "socket.io-client";
 import { onMounted, ref } from 'vue';
 import { showLoadingToast, closeToast } from 'vant';
+import { watch } from 'vue';
+
+
+
+const prop = defineProps<{
+  is_admin: boolean
+}>()
+
 
 interface LatLng {
   lat: number;
@@ -18,9 +27,22 @@ interface LatLng {
 }
 
 
+const calling_person = ref("")
+var buttonHolding = false;
+
+var active = ref(false)
+var button_value = ref("Press To Hangup")
+
 const info = useInfoStore()
+const buttonElement = ref<HTMLElement | null>(null);
+const audioElement = ref<HTMLAudioElement | null>(null);
+var local_stream:MediaStream;
+
+
 
 const socketio = ref<Socket>()
+const peer = ref<Peer>()
+
 const map = ref<L.Map | null>(null);
 const anchors = [
   0,
@@ -115,8 +137,6 @@ function redraw_markers() {
 
   Object.keys(markers).forEach((key, index) => {
     if (markers[key] != null) {
-      console.log(markers[key])
-      console.log(markers[key].selected_color)
       L.marker([markers[key].lat, markers[key].lng], {
         icon: L.icon({
           iconUrl: `https://ui-avatars.com/api/?rounded=true&name=${key}&background=${colors[markers[key].selected_color]}&color=${color_text[auto_text[markers[key].selected_color]]}`,
@@ -127,8 +147,15 @@ function redraw_markers() {
   });
 }
 
+
+function socket_call_state(user_id: string, state: string){
+  socketio.value?.emit("call", {
+    id: user_id,
+    state: state
+  })
+}
+
 async function location_watch() {
-  clearTimeout
   watch_location_id.value = await Geolocation.watchPosition({
     enableHighAccuracy: true,
     timeout: 5000,
@@ -137,25 +164,25 @@ async function location_watch() {
 }
 
 
-async function clearWatch() {
-  if (watch_location_id.value != "") {
-    socketio.value?.disconnect()
-    await Geolocation.clearWatch({ id: watch_location_id.value })
-    watch_location_id.value = "";
-  }
-}
+// async function clearWatch() {
+//   if (watch_location_id.value != "") {
+//     socketio.value?.disconnect()
+//     await Geolocation.clearWatch({ id: watch_location_id.value })
+//     watch_location_id.value = "";
+//   }
+// }
 
 
 async function start_socket() {
-  await clearWatch();
+  // await clearWatch();
   const coordinates = await Geolocation.getCurrentPosition();
   socketio.value = io("https://gps.sairashgautam.com.np/", {
     // socketio.value = io("localhost:3000", {
     auth: {
       lat: coordinates.coords.latitude,
       lng: coordinates.coords.longitude,
-      user_id: await info.get_name(),
-      selected_color: await info.get_color(),
+      user_id: await info.get_name(prop.is_admin),
+      selected_color: await info.get_color(prop.is_admin),
       room: "munjushree",
       last_update: date(),
     },
@@ -163,7 +190,6 @@ async function start_socket() {
 
   socketio.value.on("location_update", (data) => {
     data = JSON.parse(data);
-    console.log(data)
     if (Array.isArray(data)) {
       for (let i = 0; i < data.length; i++) {
         markers[data[i].id] = data[i].location
@@ -177,16 +203,124 @@ async function start_socket() {
     }
   });
 
+  socketio.value.on("call", (data) => {
+    data = JSON.parse(data);
+    if(data.state == "call" && username.value == "1 Admin"){
+      if(buttonHolding || calling_person.value != ""){
+        return socket_call_state(data.id, "exit")
+      }
+      calling_person.value = data.id;
+    }else if (data.state == "start" && username.value != "1 Admin"){
+      if(!buttonHolding){
+        return socket_call_state(data.id, "exit")
+      }
+      calling_person.value = data.id;
+      // Webrtc 
+      peer_join();
+      // Join Room
+    }else if(data.state == "exit" && calling_person.value == data.id){
+      buttonHolding = false;
+      calling_person.value = ""
+      showNotify({
+        message: `${data.id} stopped calling!`,
+        className: "on-top",
+      });
+      console.log("Reloading!")
+      window.location.reload();
+    }
+    else{
+      buttonHolding = false;
+      calling_person.value = ""
+      showNotify({
+        message: 'Busy or Disconnected!',
+        className: "on-top",
+      });
+    }
+    console.log(calling_person.value)
+    console.log("Call ->", data)
+  });
 
-  setTimeout(async() => {
-    await location_watch()
-  }, 5000)
+  // setTimeout(async() => {
+  //   await location_watch()
+  // }, 5000)
 }
 
-onMounted(async () => {
 
-  username.value = await info.get_name();
-  selected_color.value = await info.get_color();
+async function peer_join() {
+  if (peer.value == undefined){
+    peer.value = new Peer(username.value, {
+        port: 443,
+        path: '/'
+    });
+  }
+
+  peer.value?.on('open', (id) => {
+    console.log("Peer Room ID: ", id)
+    navigator.mediaDevices.getUserMedia({ video: false, audio: true })
+    .then(stream => {
+        if(peer.value != undefined){
+          let call = peer.value.call("1 Admin", stream)
+          call.on('stream', (stream) => {
+              setRemoteStream(stream);
+          })
+        }
+    })
+  })
+}
+
+function setRemoteStream(stream:MediaStream) {
+  if(audioElement.value){
+    audioElement.value.srcObject = stream
+    audioElement.value.volume = 1;
+    audioElement.value.play();
+  }
+}
+
+async function peer_start() {
+  if (peer.value == undefined){
+    peer.value = new Peer(username.value, {
+        port: 443,
+        path: '/'
+    });
+  }
+  peer.value?.on('open', (id) => {
+
+        socket_call_state(calling_person.value, "start")
+
+        navigator.mediaDevices.getUserMedia({ video: false, audio: true })
+        .then(stream => {
+            local_stream = stream;
+        })
+    peer.value?.on('call', (call) => {
+        call.answer(local_stream);
+        call.on('stream', (stream) => {
+            setRemoteStream(stream)
+        })
+    })
+  })
+}
+
+async function peer_end() {
+  if (peer.value != undefined){
+    peer.value.disconnect();
+    peer.value.destroy();
+  }
+}
+
+
+onMounted(async () => {
+  const medi = await navigator.mediaDevices.getUserMedia({ audio: true })
+  medi.getTracks().forEach(track => {
+    track.stop();
+  });
+
+  username.value = await info.get_name(prop.is_admin);
+  if(username.value == "1 Admin"){
+    button_value.value = "Press to Receive!"
+  }else{
+    button_value.value = "Press to Speak!"
+  }
+  selected_color.value = await info.get_color(prop.is_admin);
 
   const coordinates = await Geolocation.getCurrentPosition();
   map.value = L.map('map', { zoomControl: true, zoom: 1, zoomAnimation: false, fadeAnimation: true, markerZoomAnimation: true }).setView([coordinates.coords.latitude, coordinates.coords.longitude], 13);
@@ -202,7 +336,14 @@ onMounted(async () => {
   } else {
     await start_socket();
   }
+
+  setInterval( async ()=>{
+    await get_pos()
+  }, 10000)
+  
 });
+
+
 
 
 async function press_location() {
@@ -210,6 +351,10 @@ async function press_location() {
     message: 'Getting \n Location',
     forbidClick: true,
   });
+  await get_pos()
+}
+
+async function get_pos(){
   const position = await Geolocation.getCurrentPosition();
   closeToast();
   location_update(position, null)
@@ -243,10 +388,48 @@ function clickToClose() {
   }
 }
 
+function active_or_inactive() {
+  console.log("Here")
+  if(!active.value){
+    buttonElement.value?.classList.add('main-press');
+
+    buttonHolding = true;
+      if(username.value != "1 Admin"){
+        button_value.value = "Press to Hangup!"
+        showNotify({
+          message: 'Wait for Admin To Receive',
+          className: "on-top",
+        });
+        socket_call_state("1 Admin", "call")
+      }else if(username.value == "1 Admin" && calling_person.value != ""){
+        button_value.value = "Press to Hangup!"
+        peer_start()
+      }
+    active.value = true
+  }else{
+    buttonElement.value?.classList.remove('main-press');
+    if(username.value != "1 Admin"){
+        button_value.value = "Press to Speak!"
+        socket_call_state("1 Admin", "exit")
+      }else{
+        button_value.value = "Press to Receive!"
+        socket_call_state(calling_person.value, "exit")
+      }
+
+      calling_person.value = ""
+      buttonHolding = false;
+      setTimeout(()=>{
+        window.location.reload();
+      }, 1000)
+      peer_end();
+      active.value = false
+  }
+}
+
 </script>
 <template>
   <div class="w-screen h-screen bg-yellow-500 flex flex-col px-2 py-4">
-    <button @click="press_location()" class="fixed right-5 bottom-52 h-10 w-10 bg-green-500 p-2 rounded-lg location">
+    <button @click="press_location()" class="absolute right-5 bottom-52 h-10 w-10 bg-green-500 p-2 rounded-lg location">
       <svg xmlns="http://www.w3.org/2000/svg" class="w-full h-full color-white" viewBox="0 0 24 24" fill="none">
         <path
           d="M19 12C19 15.866 15.866 19 12 19C8.13401 19 5 15.866 5 12C5 8.13401 8.13401 5 12 5C15.866 5 19 8.13401 19 12Z"
@@ -262,7 +445,7 @@ function clickToClose() {
 
     </button>
 
-    <button @click="open_settings()" class="fixed left-5 bottom-52 h-10 w-10 bg-green-500 p-2 rounded-lg settings">
+    <button @click="open_settings()" class="absolute left-5 bottom-52 h-10 w-10 bg-green-500 p-2 rounded-lg settings">
       <svg xmlns="http://www.w3.org/2000/svg" class="w-full h-full color-white" viewBox="0 0 24 24" fill="none">
         <g id="Interface / Settings">
           <g id="Vector">
@@ -281,11 +464,17 @@ function clickToClose() {
     <div class="w-full h-96 rounded-xl flex flex-col">
       <img src="../assets/walkietalkie.png" class="w-full px-20" alt="">
       <button
-        class="h-36 w-full mb-3  bg-red-500 mt-2 rounded-xl text-xl font-bold grid items-center justify-center cursor-pointer main"
-        v-if="username != '1 Admin'">
-        Hold To Speak
+        class="h-36 w-full mb-3 bg-red-500 mt-2 rounded-xl text-xl font-bold grid items-center justify-center cursor-pointer main"
+        v-if="username != '1 Admin'" ref="buttonElement" @click="active_or_inactive()" >
+        {{button_value}}
       </button>
-      <div v-else class="h-36 w-full"></div>
+      <div v-else class="h-36 w-full mb-3 mt-2">
+        <button
+        class="h-36 w-full mb-3 bg-red-500 mt-2 rounded-xl text-xl font-bold grid items-center justify-center cursor-pointer main"
+        v-if="username == '1 Admin' && calling_person != ''" ref="buttonElement" @click="active_or_inactive()" >
+        {{button_value}}
+      </button>
+      </div>
     </div>
   </div>
   <van-floating-panel v-model:height="height" :anchors="anchors" style="z-index: 10000000; ">
@@ -309,8 +498,10 @@ function clickToClose() {
       </div>
     </van-form>
   </van-floating-panel>
-  <van-overlay :show="height != anchors[0]" @click="clickToClose()" class="opacity-40" style="z-index: 100000;">
+  <van-overlay :show="height != anchors[0]" @click="clickToClose()"  style="z-index: 100000;">
   </van-overlay>
+
+  <audio ref="audioElement" autoplay class="hidden"></audio>
   <!-- <input type="text" v-model="room" name="" id="">
   {{ room }} -->
 </template>
