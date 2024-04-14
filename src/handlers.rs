@@ -63,6 +63,13 @@ struct LocationData {
     location: Location,
 }
 
+
+#[derive(Serialize, Deserialize, Debug)]
+struct CallData {
+    id: String,
+    state: String,
+}
+
 pub async fn handler(socket: Arc<Socket<LocalAdapter>>) {
     // info!("Socket connected on / with id: {}", socket.sid);
     match socket.handshake.data::<Auth>() {
@@ -74,6 +81,8 @@ pub async fn handler(socket: Arc<Socket<LocalAdapter>>) {
             socket.extensions.insert(c.last_update.clone());
             socket.extensions.insert(c.selected_color.clone());
 
+            socket.join(c.user_id.clone().0).unwrap();
+            socket.join(c.room.clone().0).unwrap();
 
             let locations_to_send = Arc::new(Mutex::new(Vec::new()));
 
@@ -109,7 +118,7 @@ pub async fn handler(socket: Arc<Socket<LocalAdapter>>) {
             socket.emit("location_update", json_string).ok();
             socket.emit("info", "Welcome to the ride!").ok();
 
-            let _ = socket.to(c.room.clone().0).emit("location_update", serde_json::to_string(&LocationData{
+            let _ = socket.to(c.room.0).emit("location_update", serde_json::to_string(&LocationData{
                 id: c.user_id.0,
                 selected_color: c.selected_color.0,
                 location: Location{
@@ -118,7 +127,6 @@ pub async fn handler(socket: Arc<Socket<LocalAdapter>>) {
                     last_update: c.last_update.0,
                 }
             }).unwrap());
-            socket.join(c.room.0).unwrap();
         }
         Err(c) => {
             println!("{}", c);
@@ -152,4 +160,23 @@ pub async fn handler(socket: Arc<Socket<LocalAdapter>>) {
             .unwrap();
         },
     );
+
+
+    socket.on(
+        "call",
+        |socket, call: CallData, _, _| async move {
+            let UserId(ref user_id) = *socket.extensions.get().unwrap();
+            socket
+                .to(call.id)
+                .emit(
+                    "call",
+                    serde_json::to_string(&CallData {
+                        id: user_id.to_string(),
+                        state: call.state
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            },
+        );
 }
