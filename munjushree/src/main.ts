@@ -18,3 +18,5 @@ app.use(router)
 app.use(Toast).use(FloatingPanel).use(Form).use(Field).use(CellGroup).use(Button).use(Overlay).use(Notify)
 
 app.mount('#app')
+
+document.addEventListener("contextmenu", (e) => {e.preventDefault()});
