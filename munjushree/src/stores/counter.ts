@@ -19,7 +19,10 @@ export const useInfoStore = defineStore('info', () => {
     });
   }
 
-  async function get_name():Promise<string> {
+  async function get_name(is_admin: boolean):Promise<string> {
+    if(is_admin){
+      return "1 Admin"
+    }
     const name = (await Preferences.get({
       key: 'name',
     })).value as string;
@@ -27,7 +30,10 @@ export const useInfoStore = defineStore('info', () => {
     return name == null? "": name;
   }
 
-  async function get_color():Promise<number> {
+  async function get_color(is_admin: boolean):Promise<number> {
+    if(is_admin){
+      return 5
+    }
     const name = parseInt((await Preferences.get({
       key: 'color',
     })).value as string);
